@@ -1,0 +1,12 @@
+# Blueprint Render — https://render.com/docs/blueprint-spec
+# Depois do deploy: copia o URL HTTPS (ex. https://joana.onrender.com) para o webhook da Meta: https://.../webhook
+
+services:
+  - type: web
+    name: joana
+    env: node
+    region: frankfurt
+    plan: free
+    buildCommand: npm install
+    startCommand: npm run start:prod
+    healthCheckPath: /health

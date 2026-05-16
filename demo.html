@@ -1,0 +1,313 @@
+<!doctype html>
+<html lang="pt">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Joana demo</title>
+  <style>
+    :root { color-scheme: light; font-family: Arial, sans-serif; }
+    body { margin: 0; min-height: 100vh; background: #f5f1ea; color: #221f1c; display: grid; place-items: center; }
+    main { width: min(760px, calc(100vw - 28px)); height: min(760px, calc(100vh - 28px)); display: grid; grid-template-rows: auto 1fr auto; background: #fffaf2; border: 1px solid #ded4c7; border-radius: 8px; overflow: hidden; }
+    header { padding: 18px 20px; background: #264653; color: white; }
+    h1 { margin: 0; font-size: 22px; letter-spacing: 0; }
+    p { margin: 4px 0 0; color: #d9ebe9; font-size: 14px; }
+    #chat { padding: 18px; overflow: auto; display: flex; flex-direction: column; gap: 10px; }
+    .msg { max-width: 78%; padding: 10px 12px; border-radius: 8px; line-height: 1.35; white-space: pre-wrap; }
+    .me { align-self: flex-end; background: #2a9d8f; color: white; }
+    .joana { align-self: flex-start; background: #efe7da; color: #221f1c; }
+    form { display: grid; grid-template-columns: 1fr auto; gap: 8px; padding: 12px; border-top: 1px solid #ded4c7; background: white; }
+    input, button { font: inherit; border-radius: 8px; border: 1px solid #c9bdae; padding: 12px; }
+    button { background: #e76f51; color: white; border: 0; cursor: pointer; min-width: 96px; }
+  </style>
+</head>
+<body>
+  <main>
+    <header>
+      <h1>Joana</h1>
+      <p>Demo local do tom e do fluxo antes de ligar ao WhatsApp.</p>
+    </header>
+    <section id="chat"></section>
+    <form id="form">
+      <input id="text" autocomplete="off" placeholder="Escreve aqui, Pedro..." autofocus>
+      <button>Enviar</button>
+    </form>
+  </main>
+  <script>
+    const chat = document.querySelector("#chat");
+    const form = document.querySelector("#form");
+    const input = document.querySelector("#text");
+    const habits = ["medicação", "ginásio", "Boys", "Ligar à Tuxa", "Outros"];
+    const state = { step: "new", selected: [], index: 0, pending: null, variants: {}, repeatTimers: [], pendingTimer: null };
+    const twoHours = 2 * 60 * 60 * 1000;
+    const demoNoReplyDelay = 8000;
+    const repeatNudges = [
+      "Pedro, não te esqueças de {text}.",
+      "Pedro, segunda chamada para {text}.",
+      "Pedro Emanuel, agora é sério: {text}.",
+      "Pedro, último toque para {text}."
+    ];
+    const reminderQuestions = [
+      "Claro, Pedro. Com ou sem horário definido?",
+      'Pedro, para "{text}": com ou sem horário definido?',
+      '"{text}" é com ou sem horário definido?'
+    ];
+
+    function add(kind, text) {
+      const el = document.createElement("div");
+      el.className = "msg " + kind;
+      el.textContent = text;
+      chat.appendChild(el);
+      chat.scrollTop = chat.scrollHeight;
+    }
+
+    function joana(text) {
+      setTimeout(() => add("joana", text), 160);
+    }
+
+    function fill(template, text) {
+      return template.replaceAll("{text}", text);
+    }
+
+    function pick(options, seed) {
+      let hash = 0;
+      for (const char of String(seed || "")) hash = (hash * 31 + char.charCodeAt(0)) >>> 0;
+      return options[hash % options.length];
+    }
+
+    function pickFresh(group, options, seed) {
+      let hash = 0;
+      for (const char of String(seed || "")) hash = (hash * 31 + char.charCodeAt(0)) >>> 0;
+      let index = hash % options.length;
+      if (options.length > 1 && state.variants[group] === index) index = (index + 1) % options.length;
+      state.variants[group] = index;
+      return options[index];
+    }
+
+    function parseSelection(text) {
+      const clean = text.toLowerCase().normalize("NFD").replace(/\p{Diacritic}/gu, "");
+      const out = [];
+      if (/\b1\b|medic/.test(clean)) out.push("medicação");
+      if (/\b2\b|ginas/.test(clean)) out.push("ginásio");
+      if (/\b3\b|boy/.test(clean)) out.push("Boys");
+      if (/\b4\b|tuxa|ligar/.test(clean)) out.push("Ligar à Tuxa");
+      if (/\b5\b|outro/.test(clean)) out.push("Outros");
+      return out;
+    }
+
+    function parseReminder(text) {
+      const direct = parseReminderFromText(text);
+      if (direct) return direct;
+      const clean = text.toLowerCase().normalize("NFD").replace(/\p{Diacritic}/gu, "").trim();
+      return parseReminderFromText(clean) || fuzzyReminder(clean);
+    }
+
+    function parseReminderFromText(text) {
+      const patterns = [
+        /(?:lembra|lembre|lebra|leba|lemba|lemb)\s*-?\s*me\s+(?:de\s+|d\s+)?(.+)/i,
+        /(?:lembra|lembre|lebra|leba|lemba|lemb)\s+(?:de\s+|d\s+)?(.+)/i,
+        /(?:nao|n)\s+(?:me\s+)?(?:deixes|deixa|dexes|dexa)\s+(?:esquecer|eskecer)\s+(?:de\s+|d\s+)?(.+)/i,
+        /(?:nao|n)\s+(?:te\s+)?(?:esquecas|eskecas)\s+(?:de\s+|d\s+)?(.+)/i,
+        /(?:recorda|relembra|avisa)\s*-?\s*me\s+(?:de\s+|d\s+)?(.+)/i
+      ];
+      for (const pattern of patterns) {
+        const match = text.match(pattern);
+        if (match && match[1]) return tidyReminder(match[1]);
+      }
+      return null;
+    }
+
+    function fuzzyReminder(text) {
+      const words = text.split(/\s+/).filter(Boolean);
+      const index = words.findIndex((word) => distance(word, "lembra") <= 2 || distance(word, "lembre") <= 2);
+      if (index === -1) return null;
+      let start = index + 1;
+      if (["me", "m"].includes(words[start])) start += 1;
+      if (["de", "d"].includes(words[start])) start += 1;
+      return tidyReminder(words.slice(start).join(" "));
+    }
+
+    function tidyReminder(text) {
+      return correctReminder(text.trim().replace(/^(de|d)\s+/i, "").replace(/[.!?]+$/, "").trim());
+    }
+
+    function correctReminder(text) {
+      const clean = text.toLowerCase().normalize("NFD").replace(/\p{Diacritic}/gu, "").replace(/\s+/g, " ").trim();
+      const exact = {
+        "comprar pao": "comprar pão",
+        "beber agua": "beber água",
+        "tomar medicacao": "tomar medicação",
+        "medicacao": "medicação",
+        "ginasio": "ginásio",
+        "ligar a tuxa": "ligar à Tuxa",
+        "ligar para a tuxa": "ligar à Tuxa"
+      };
+      if (exact[clean]) return exact[clean];
+      return text
+        .replace(/\bpao\b/gi, "pão")
+        .replace(/\bagua\b/gi, "água")
+        .replace(/\bmedicacao\b/gi, "medicação")
+        .replace(/\bginasio\b/gi, "ginásio")
+        .replace(/\bligar a tuxa\b/gi, "ligar à Tuxa")
+        .replace(/\btuxa\b/gi, "Tuxa");
+    }
+
+    function correctedUserText(text) {
+      const reminder = parseReminder(text);
+      if (reminder) return `lembra-me de ${reminder}`;
+      return correctReminder(text);
+    }
+
+    function hasTime(text) {
+      return /\b([01]?\d|2[0-3])(?:(?:[:hH])([0-5]\d)?)?\b/.test(text);
+    }
+
+    function noSpecificTime(text) {
+      const clean = text.toLowerCase().normalize("NFD").replace(/\p{Diacritic}/gu, "");
+      return /sem horario|sem hora|nao|tanto faz|quando der|sem/.test(clean);
+    }
+
+    function specificTimeIntent(text) {
+      const clean = text.toLowerCase().normalize("NFD").replace(/\p{Diacritic}/gu, "");
+      return /\bcom horario\b|\bcom hora\b|\bhorario definido\b|\bhora marcada\b|^com$/.test(clean);
+    }
+
+    function scheduleNoReplyFallback() {
+      clearTimeout(state.pendingTimer);
+      state.pendingTimer = setTimeout(() => {
+        if (!state.pending || state.pending.step !== "time_choice") return;
+        const reminderText = state.pending.text;
+        joana(fill(pickFresh("repeat-confirm", [
+          "Feito, Pedro. Vou insistir sobre {text}.",
+          "Combinado. Modo chata ativado para {text}.",
+          "Ok, Pedro. Vou lembrar-te de {text} de 2 em 2 horas.",
+          "Fechado, bonito. {text} fica por minha conta."
+        ], reminderText), reminderText));
+        repeatNudges.forEach((message, index) => {
+          state.repeatTimers.push(setTimeout(() => joana(fill(message, reminderText)), twoHours * (index + 1)));
+        });
+        state.pending = null;
+      }, demoNoReplyDelay);
+    }
+
+    function distance(a, b) {
+      const costs = Array.from({ length: a.length + 1 }, (_, index) => index);
+      for (let j = 1; j <= b.length; j += 1) {
+        let previous = costs[0];
+        costs[0] = j;
+        for (let i = 1; i <= a.length; i += 1) {
+          const current = costs[i];
+          costs[i] = a[i - 1] === b[j - 1] ? previous : Math.min(previous, costs[i - 1], costs[i]) + 1;
+          previous = current;
+        }
+      }
+      return costs[a.length];
+    }
+
+    function answer(text) {
+      if (state.step === "new") {
+        joana("Hey cutie! Sim, ambos sabemos que a tua namorada é chata, tanta mensagem para te lembrares disto ou daquilo, mas ela só se preocupa.");
+        joana("Agora sou eu a chata, o meu nome é Joana e comigo podes chatear-te que não me faz diferença ❤️");
+        joana("Então vamos lá, Pedro. O que precisas de te lembrar todos os dias?\n1. medicação\n2. ginásio\n3. Boys\n4. Ligar à Tuxa\n5. Outros");
+        state.step = "choose";
+        return;
+      }
+
+      if (state.step === "choose") {
+        state.selected = parseSelection(text);
+        if (!state.selected.length) {
+          joana(pickFresh("unclear", [
+            "Pedro, não apanhei. Manda números ou nomes.",
+            "Isso veio enigmático, Pedro. Tipo: 1, 2, 4.",
+            "Pedro, traduz para Joana: 1, 2, 3, 4 ou 5."
+          ], text));
+          return;
+        }
+        state.step = "times";
+        state.index = 0;
+        joana(`Pedro, a que horas para ${state.selected[state.index]}?`);
+        return;
+      }
+
+      if (state.step === "times") {
+        state.index += 1;
+        if (state.index < state.selected.length) {
+          joana(`Pedro, a que horas queres que eu te lembre de ${state.selected[state.index]}?`);
+        } else {
+          state.step = "done";
+          joana('tá feito, Pedro. Agora manda "lembra-me de x".');
+        }
+        return;
+      }
+
+      if (state.pending) {
+        const reminderText = state.pending.text;
+        if (hasTime(text)) {
+          clearTimeout(state.pendingTimer);
+          joana(fill(pickFresh("once-confirm", [
+            "Feito, Pedro. Vou lembrar-te de {text}.",
+            "Guardado, Pedro: {text}.",
+            "Apontado. {text} fica comigo.",
+            "Sim senhor, bonito. {text} está guardado."
+          ], reminderText), reminderText));
+          state.pending = null;
+          return;
+        }
+
+        if (specificTimeIntent(text)) {
+          clearTimeout(state.pendingTimer);
+          state.pending.step = "specific_time";
+          joana("Pedro, manda-me a hora certinha.");
+          return;
+        }
+
+        if (noSpecificTime(text)) {
+          clearTimeout(state.pendingTimer);
+          joana(fill(pickFresh("repeat-confirm", [
+            "Feito, Pedro. Vou insistir sobre {text}.",
+            "Combinado. Modo chata ativado para {text}.",
+            "Ok, Pedro. Vou lembrar-te de {text} de 2 em 2 horas.",
+            "Fechado, bonito. {text} fica por minha conta."
+          ], reminderText), reminderText));
+          repeatNudges.forEach((message, index) => {
+            state.repeatTimers.push(setTimeout(() => joana(fill(message, reminderText)), twoHours * (index + 1)));
+          });
+          state.pending = null;
+          return;
+        }
+
+        joana(pickFresh("missing-time", [
+          "Pedro, com ou sem horário definido?",
+          "Responde só: com horário ou sem horário, bonito.",
+          "Pedro, preciso dessa parte: com ou sem horário?"
+        ], text));
+        return;
+      }
+
+      const reminder = parseReminder(text);
+      if (reminder) {
+        state.pending = { text: reminder, step: "time_choice" };
+        joana(fill(pickFresh("reminder-question", reminderQuestions, reminder), reminder));
+        scheduleNoReplyFallback();
+      } else {
+        joana(pickFresh("fallback", [
+          'Pedro, manda "lembra-me de..." e eu trato.',
+          'Manda lá, Pedro. Estou de serviço.',
+          'Pedro, isso passou-me. Tenta "lembra-me de...".',
+          'Pedro, escreve-me bonito: "lembra-me de..." e eu porto-me bem.'
+        ], text));
+      }
+    }
+
+    form.addEventListener("submit", (event) => {
+      event.preventDefault();
+      const text = input.value.trim();
+      if (!text) return;
+      input.value = "";
+      add("me", correctedUserText(text));
+      answer(text);
+    });
+
+    setTimeout(() => answer("ola"), 250);
+  </script>
+</body>
+</html>
