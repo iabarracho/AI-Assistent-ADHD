@@ -7,6 +7,7 @@ import { JoanaAgent } from "./agent.js";
 import { normalizeWaPhone, PLACEHOLDER_WA_ID } from "./phone.js";
 import { verifyMetaWebhookSignature } from "./webhookVerify.js";
 import { WhatsAppMessenger, parseCloudWebhook, parseRequestBody } from "./whatsapp.js";
+import { renderPrivacyPage, renderTermsPage } from "./legalPages.js";
 
 const store = new Store();
 const realMessenger = new WhatsAppMessenger();
@@ -67,12 +68,32 @@ const server = http.createServer(async (request, response) => {
     const url = new URL(request.url, `http://${request.headers.host}`);
 
     if (request.method === "GET" && url.pathname === "/health") {
-      return sendJson(response, 200, { ok: true, name: "Joana" });
+      return sendJson(response, 200, {
+        ok: true,
+        name: "Joana",
+        whatsapp: {
+          token: Boolean(config.cloud.token),
+          phoneNumberId: Boolean(config.cloud.phoneNumberId),
+          appSecret: Boolean(config.cloud.appSecret)
+        }
+      });
     }
 
     if (request.method === "GET" && url.pathname === "/") {
       response.writeHead(200, { "Content-Type": "text/html; charset=utf-8" });
       response.end(renderLanding());
+      return;
+    }
+
+    if (request.method === "GET" && url.pathname === "/privacy") {
+      response.writeHead(200, { "Content-Type": "text/html; charset=utf-8" });
+      response.end(renderPrivacyPage());
+      return;
+    }
+
+    if (request.method === "GET" && url.pathname === "/terms") {
+      response.writeHead(200, { "Content-Type": "text/html; charset=utf-8" });
+      response.end(renderTermsPage());
       return;
     }
 
@@ -111,9 +132,11 @@ const server = http.createServer(async (request, response) => {
     }
 
     if (request.method === "POST" && url.pathname === "/webhook") {
+      console.log("[Joana] POST /webhook (pedido da Meta ou teste)");
       const raw = await readRawBody(request);
       const sig = request.headers["x-hub-signature-256"];
       if (!verifyMetaWebhookSignature(raw, sig, config.cloud.appSecret)) {
+        console.error("[Joana] Webhook POST rejeitado: assinatura inválida (confirma WHATSAPP_APP_SECRET na Render)");
         return sendJson(response, 403, { error: "Invalid webhook signature" });
       }
       let payload = {};
@@ -123,8 +146,16 @@ const server = http.createServer(async (request, response) => {
         return sendJson(response, 400, { error: "Invalid JSON" });
       }
       const messages = parseCloudWebhook(payload);
+      console.log(`[Joana] Webhook: ${messages.length} mensagem(ns)`);
+      if (!config.cloud.phoneNumberId) {
+        console.error("[Joana] WHATSAPP_PHONE_NUMBER_ID em falta — respostas não são enviadas ao WhatsApp");
+      }
       for (const message of messages) {
-        await handleIncomingMessage(message);
+        try {
+          await handleIncomingMessage(message);
+        } catch (error) {
+          console.error(`[Joana] Erro ao responder a ${message.from}:`, error.message);
+        }
       }
       return sendJson(response, 200, { ok: true });
     }
@@ -310,7 +341,7 @@ function renderLanding() {
         <p id="msg" role="status"></p>
       </form>
     </div>
-    <p class="legal">Serviço via WhatsApp Business. Ao inscrever-te aceitas receber mensagens neste número. O primeiro contacto por WhatsApp segue as regras da Meta (opt-in e, quando aplicável, mensagens modelo aprovadas).</p>
+    <p class="legal">Serviço via WhatsApp Business. Ao inscrever-te aceitas receber mensagens neste número. O primeiro contacto por WhatsApp segue as regras da Meta (opt-in e, quando aplicável, mensagens modelo aprovadas). <a href="/privacy">Privacidade</a> · <a href="/terms">Termos</a>.</p>
     ${devHint}
   </div>
   <script>
