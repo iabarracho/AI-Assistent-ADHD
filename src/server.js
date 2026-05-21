@@ -7,19 +7,46 @@ import { JoanaAgent } from "./agent.js";
 import { normalizeWaPhone, PLACEHOLDER_WA_ID } from "./phone.js";
 import { verifyMetaWebhookSignature } from "./webhookVerify.js";
 import { WhatsAppMessenger, parseCloudWebhook, parseRequestBody } from "./whatsapp.js";
-import { renderPrivacyPage, renderTermsPage } from "./legalPages.js";
+import { sendTelegramText, startTelegramPolling } from "./telegram.js";
+import { getBaileysQrDataUrl, getBaileysStatus, renderBaileysLinkPage, startBaileys } from "./baileys.js";
+import { renderDataDeletionPage, renderPrivacyPage, renderTermsPage } from "./legalPages.js";
+import { renderChatPage } from "./chatPage.js";
 
 const store = new Store();
-const realMessenger = new WhatsAppMessenger();
-const devOutbox = {};
+const whatsappMessenger = new WhatsAppMessenger();
+const replyOutbox = {};
+let baileysSend = null;
+
 const messenger = {
   async sendText(to, text) {
-    if (!devOutbox[to]) devOutbox[to] = [];
-    devOutbox[to].push({ from: "Joana", text, at: new Date().toISOString() });
-    await realMessenger.sendText(to, text);
+    if (!replyOutbox[to]) replyOutbox[to] = [];
+    replyOutbox[to].push({ from: "Joana", text, at: new Date().toISOString() });
+    if (config.messenger === "telegram") {
+      await sendTelegramText(to, text);
+    } else if (config.messenger === "baileys") {
+      if (baileysSend) await baileysSend(to, text);
+    } else if (config.messenger === "whatsapp") {
+      await whatsappMessenger.sendText(to, text);
+    }
   }
 };
 const agent = new JoanaAgent(store, messenger);
+
+if (config.messenger === "telegram" && config.telegram.botToken) {
+  startTelegramPolling((chatId, text) => agent.receive(chatId, text));
+}
+
+if (config.messenger === "baileys") {
+  const handlers = {
+    onText: (phone, text) => agent.receive(phone, text),
+    sendText: async () => {}
+  };
+  startBaileys(handlers)
+    .then(() => {
+      baileysSend = handlers.sendText;
+    })
+    .catch((error) => console.error("[Joana] Falha ao iniciar Baileys:", error));
+}
 
 const joinHits = new Map();
 const joinWindowMs = 60 * 60 * 1000;
@@ -71,10 +98,14 @@ const server = http.createServer(async (request, response) => {
       return sendJson(response, 200, {
         ok: true,
         name: "Joana",
+        messenger: config.messenger,
         whatsapp: {
           token: Boolean(config.cloud.token),
           phoneNumberId: Boolean(config.cloud.phoneNumberId),
           appSecret: Boolean(config.cloud.appSecret)
+        },
+        telegram: {
+          botToken: Boolean(config.telegram.botToken)
         }
       });
     }
@@ -95,6 +126,33 @@ const server = http.createServer(async (request, response) => {
       response.writeHead(200, { "Content-Type": "text/html; charset=utf-8" });
       response.end(renderTermsPage());
       return;
+    }
+
+    if (request.method === "GET" && url.pathname === "/data-deletion") {
+      response.writeHead(200, { "Content-Type": "text/html; charset=utf-8" });
+      response.end(renderDataDeletionPage());
+      return;
+    }
+
+    if (request.method === "GET" && url.pathname === "/chat") {
+      response.writeHead(200, { "Content-Type": "text/html; charset=utf-8" });
+      response.end(renderChatPage());
+      return;
+    }
+
+    if (request.method === "GET" && url.pathname === "/wa/link") {
+      response.writeHead(200, { "Content-Type": "text/html; charset=utf-8" });
+      response.end(renderBaileysLinkPage());
+      return;
+    }
+
+    if (request.method === "GET" && url.pathname === "/wa/status") {
+      const qrDataUrl = await getBaileysQrDataUrl();
+      return sendJson(response, 200, { ...getBaileysStatus(), qrDataUrl });
+    }
+
+    if (request.method === "POST" && url.pathname === "/api/chat/message") {
+      return handleChatMessage(request, response);
     }
 
     if (request.method === "POST" && url.pathname === "/api/join") {
@@ -166,7 +224,7 @@ const server = http.createServer(async (request, response) => {
         await agent.receive(body.From.replace(/^whatsapp:\+?/, ""), body.Body);
       } else if (body.From && body.MediaUrl0 && String(body.MediaContentType0 || "").startsWith("audio/")) {
         const from = body.From.replace(/^whatsapp:\+?/, "");
-        const text = await realMessenger.transcribeTwilioAudio(body.MediaUrl0);
+        const text = await whatsappMessenger.transcribeTwilioAudio(body.MediaUrl0);
         if (text) {
           await agent.receive(from, text);
         } else {
@@ -182,11 +240,11 @@ const server = http.createServer(async (request, response) => {
       if (!devChatEnabled()) return sendJson(response, 404, { error: "Not found" });
       const body = await parseRequestBody(request);
       const from = body.from || PLACEHOLDER_WA_ID;
-      const before = devOutbox[from]?.length || 0;
+      const before = replyOutbox[from]?.length || 0;
       await agent.receive(from, body.text || "olá");
       return sendJson(response, 200, {
         ok: true,
-        messages: (devOutbox[from] || []).slice(before)
+        messages: (replyOutbox[from] || []).slice(before)
       });
     }
 
@@ -208,6 +266,36 @@ server.listen(config.port, () => {
     }
   }
 });
+
+async function handleChatMessage(request, response) {
+  const ip = clientIp(request);
+  if (!joinRateOk(ip)) {
+    return sendJson(response, 429, { error: "Demasiados pedidos. Tenta mais tarde." });
+  }
+
+  const body = await parseRequestBody(request);
+  const phone = normalizeWaPhone(body.phone);
+  if (!phone) {
+    return sendJson(response, 400, { error: "Indica um número válido com indicativo (ex.: +351 912 345 678)." });
+  }
+
+  const text = String(body.text || "").trim();
+  if (!text) {
+    return sendJson(response, 400, { error: "Mensagem vazia." });
+  }
+
+  try {
+    const before = replyOutbox[phone]?.length || 0;
+    await agent.receive(phone, text);
+    return sendJson(response, 200, {
+      ok: true,
+      messages: (replyOutbox[phone] || []).slice(before)
+    });
+  } catch (error) {
+    console.error("Chat message failed", error);
+    return sendJson(response, 500, { error: "Não foi possível responder agora. Tenta outra vez." });
+  }
+}
 
 async function handleJoin(request, response) {
   const ip = clientIp(request);
@@ -264,7 +352,7 @@ async function handleIncomingMessage(message) {
   }
 
   if (message.audio?.provider === "cloud") {
-    const text = await realMessenger.transcribeCloudAudio(message.audio.id);
+      const text = await whatsappMessenger.transcribeCloudAudio(message.audio.id);
     if (text) {
       await agent.receive(message.from, text);
     } else {
@@ -341,7 +429,7 @@ function renderLanding() {
         <p id="msg" role="status"></p>
       </form>
     </div>
-    <p class="legal">Serviço via WhatsApp Business. Ao inscrever-te aceitas receber mensagens neste número. O primeiro contacto por WhatsApp segue as regras da Meta (opt-in e, quando aplicável, mensagens modelo aprovadas). <a href="/privacy">Privacidade</a> · <a href="/terms">Termos</a>.</p>
+    <p class="legal">Fala com a Joana em <a href="/chat"><strong>/chat</strong></a> (no telemóvel, sem instalar nada). WhatsApp Business quando a Meta estiver aprovada. <a href="/privacy">Privacidade</a> · <a href="/terms">Termos</a>.</p>
     ${devHint}
   </div>
   <script>

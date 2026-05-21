@@ -25,7 +25,12 @@ export const config = {
     ? path.resolve(process.env.JOANA_DATA_DIR)
     : path.join(rootDir, "data"),
   port: Number(process.env.PORT || 3000),
+  /** whatsapp (API Meta) | baileys (WhatsApp Web, não oficial) | telegram | web */
+  messenger: process.env.JOANA_MESSENGER || "whatsapp",
   provider: process.env.WHATSAPP_PROVIDER || "cloud",
+  telegram: {
+    botToken: process.env.TELEGRAM_BOT_TOKEN
+  },
   cloud: {
     token: process.env.WHATSAPP_TOKEN,
     phoneNumberId: process.env.WHATSAPP_PHONE_NUMBER_ID,

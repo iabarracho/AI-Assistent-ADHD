@@ -28,7 +28,7 @@ function legalShell(title, bodyHtml) {
 <body>
   <div class="wrap">
     ${bodyHtml}
-    <nav><a href="/">Início</a> · <a href="/privacy">Privacidade</a> · <a href="/terms">Termos</a></nav>
+    <nav><a href="/">Início</a> · <a href="/privacy">Privacidade</a> · <a href="/data-deletion">Eliminar dados</a> · <a href="/terms">Termos</a></nav>
   </div>
 </body>
 </html>`;
@@ -117,4 +117,39 @@ export function renderTermsPage() {
     <p><a href="mailto:${CONTACT_EMAIL}">${CONTACT_EMAIL}</a></p>
   `;
   return legalShell("Termos", body);
+}
+
+export function renderDataDeletionPage() {
+  const body = `
+    <h1>Eliminação de dados do utilizador</h1>
+    <p class="meta">${APP_NAME} · Última atualização: ${LAST_UPDATED}</p>
+
+    <p>Se usas a Joana no WhatsApp ou no site, podes pedir que apaguemos os teus dados pessoais.</p>
+
+    <h2>O que apagamos</h2>
+    <ul>
+      <li>Número de telefone associado à conta/conversa</li>
+      <li>Mensagens e preferências guardadas (lembretes, horários, onboarding)</li>
+      <li>Dados no ficheiro de contacto do serviço no nosso servidor</li>
+    </ul>
+
+    <h2>Como pedir eliminação</h2>
+    <p><strong>Opção 1 — Email</strong><br>
+    Envia para <a href="mailto:${CONTACT_EMAIL}?subject=Pedido%20elimina%C3%A7%C3%A3o%20de%20dados%20Joana">${CONTACT_EMAIL}</a>
+    com o assunto <em>Pedido eliminação de dados Joana</em> e indica o teu número de WhatsApp com indicativo (ex. +351 …).</p>
+
+    <p><strong>Opção 2 — WhatsApp</strong><br>
+  Escreve à Joana no mesmo número onde recebes mensagens e pede explicitamente:
+  <em>“Quero apagar os meus dados”</em> ou <em>“Quero deixar de receber mensagens”</em>.</p>
+
+    <h2>Prazo</h2>
+    <p>Respondemos e tratamos o pedido em até <strong>30 dias</strong> (RGPD), normalmente mais depressa.</p>
+
+    <h2>Depois de apagar</h2>
+    <p>Deixas de receber lembretes. Se voltares a usar o serviço, um novo registo pode criar dados novos.</p>
+
+    <h2>Mais informação</h2>
+    <p>Consulta a <a href="/privacy">política de privacidade</a> completa.</p>
+  `;
+  return legalShell("Eliminação de dados", body);
 }
