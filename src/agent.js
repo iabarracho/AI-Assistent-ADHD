@@ -1,5 +1,6 @@
 import { config } from "./config.js";
 import {
+  formatScheduledInZone,
   formatTimezoneLabel,
   nextDailyAt as nextDailyAtInZone,
   parseReminderSchedule,
@@ -171,7 +172,7 @@ export class JoanaAgent {
         console.log(
           `[Joana] Lembrete agendado (once) ${label} → ${at.toISOString()} (${tz})`
         );
-        await this.sendVariant(phone, "once_confirmation", onceConfirmations, label, label);
+        await this.sendOnceConfirmation(phone, label, at, tz);
         return;
       }
 
@@ -358,7 +359,7 @@ export class JoanaAgent {
         `[Joana] Lembrete agendado (once) ${reminderText} → ${specificDate.toISOString()} (${tz})`
       );
       this.store.updateContact(phone, { pendingReminder: null });
-      await this.sendVariant(phone, "once_confirmation", onceConfirmations, reminderText, reminderText);
+      await this.sendOnceConfirmation(phone, reminderText, specificDate, tz);
       return;
     }
 
@@ -406,6 +407,14 @@ export class JoanaAgent {
       this.store.updateContact(contact.phone, { pendingReminder: null });
       await this.sendVariant(contact.phone, "repeat_confirmation", repeatConfirmations, pending.text, pending.text);
     }
+  }
+
+  async sendOnceConfirmation(phone, label, at, timeZone) {
+    const when = formatScheduledInZone(at, timeZone);
+    await this.messenger.sendText(
+      phone,
+      `Feito, ${defaultName}. Às ${when} (tua hora) lembro-te: ${label}.`
+    );
   }
 
   async sendVariant(phone, group, options, seed = "", fillText = null) {
@@ -526,10 +535,13 @@ function stripTimeFromReminderText(text) {
 function stripScheduleFromReminderText(reminderText, fullText) {
   let label = reminderText;
   label = label.replace(
-    /^(?:em|daqui a|dentro de)\s+\d+\s*(?:minutos?|min|m|horas?|h)\s+(?:de|d)\s+/i,
+    /^(?:em|daqui a|daqui|dentro de)\s+[\w\d]+\s*(?:minutos?|min|m|horas?|h)\s+(?:de|d)\s+/i,
     ""
   );
-  label = label.replace(/\s+em\s+\d+\s*(?:minutos?|min|m|horas?|h)\b/gi, "");
+  label = label.replace(
+    /\s+(?:em|daqui a|daqui|dentro de)\s+[\w\d]+\s*(?:minutos?|min|m|horas?|h)\b/gi,
+    ""
+  );
   return stripTimeFromReminderText(label).trim();
 }
 
@@ -537,12 +549,12 @@ function extractReminderText(text) {
   const cleaned = text.trim();
 
   const relativeWithDe = cleaned.match(
-    /(?:lembra|lembre|lebra|leba|lemba|lemb|recorda|relembra|avisa)\s*-?\s*me\s+em\s+\d+\s*(?:minutos?|min|m|horas?|h)\s+(?:de|d)\s+(.+)/i
+    /(?:lembra|lembre|lebra|leba|lemba|lemb|recorda|relembra|avisa)\s*-?\s*me\s+(?:em|daqui a|daqui|dentro de)\s+[\w\d]+\s*(?:minutos?|min|m|horas?|h)\s+(?:de|d)\s+(.+)/i
   );
   if (relativeWithDe?.[1]) return cleanReminderText(relativeWithDe[1]);
 
   const deWithRelative = cleaned.match(
-    /(?:lembra|lembre|lebra|leba|lemba|lemb|recorda|relembra|avisa)\s*-?\s*me\s+(?:de|d)\s+(.+?)\s+em\s+\d+\s*(?:minutos?|min|m|horas?|h)\b/i
+    /(?:lembra|lembre|lebra|leba|lemba|lemb|recorda|relembra|avisa)\s*-?\s*me\s+(?:de|d)\s+(.+?)\s+(?:em|daqui a|daqui|dentro de)\s+[\w\d]+\s*(?:minutos?|min|m|horas?|h)\b/i
   );
   if (deWithRelative?.[1]) return cleanReminderText(deWithRelative[1]);
 

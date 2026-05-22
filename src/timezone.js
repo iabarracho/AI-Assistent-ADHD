@@ -89,6 +89,43 @@ export function nextDailyAt(time, timeZone) {
  * "em 2 minutos", "daqui a 1 hora", "dentro de 30 min"
  * @returns {Date|null}
  */
+const WORD_NUMBERS = {
+  um: 1,
+  uma: 1,
+  dois: 2,
+  duas: 2,
+  tres: 3,
+  três: 3,
+  quatro: 4,
+  cinco: 5,
+  seis: 6,
+  sete: 7,
+  oito: 8,
+  nove: 9,
+  dez: 10,
+  quinze: 15,
+  vinte: 20,
+  trinta: 30,
+  meia: 30
+};
+
+function parseDelayAmount(raw) {
+  if (raw == null || raw === "") return null;
+  const digits = Number(raw);
+  if (Number.isFinite(digits) && digits > 0) return digits;
+  return WORD_NUMBERS[String(raw).toLowerCase()] ?? null;
+}
+
+export function textLooksRelativeDelay(text) {
+  const n = String(text || "")
+    .toLowerCase()
+    .normalize("NFD")
+    .replace(/\p{Diacritic}/gu, "");
+  return /(?:daqui|dentro de|em\s+\d|em\s+(?:um|uma|dois|duas|tres|três|\d+))\s*(?:min|hora)|\d+\s*minutos?|\b(?:um|uma|dois|duas)\s*minuto/.test(
+    n
+  );
+}
+
 export function parseRelativeDelay(text, timeZone) {
   const n = String(text || "")
     .toLowerCase()
@@ -96,13 +133,13 @@ export function parseRelativeDelay(text, timeZone) {
     .replace(/\p{Diacritic}/gu, "");
 
   const minutePatterns = [
-    /(?:em|daqui a|dentro de)\s+(\d{1,3})\s*(?:minutos?|min|m)\b/,
-    /\b(\d{1,3})\s*(?:minutos?|min|m)\b/
+    /(?:em|daqui a|daqui|dentro de)\s+(\d{1,3}|[a-z]+)\s*(?:minutos?|min|m)\b/,
+    /\b(\d{1,3}|[a-z]+)\s*(?:minutos?|min|m)\b/
   ];
   for (const pattern of minutePatterns) {
     const match = n.match(pattern);
     if (match) {
-      const minutes = Number(match[1]);
+      const minutes = parseDelayAmount(match[1]);
       if (minutes > 0 && minutes <= 24 * 60) {
         return DateTime.now().setZone(timeZone).plus({ minutes }).toUTC().toJSDate();
       }
@@ -110,13 +147,13 @@ export function parseRelativeDelay(text, timeZone) {
   }
 
   const hourPatterns = [
-    /(?:em|daqui a|dentro de)\s+(\d{1,3})\s*(?:horas?|h)\b/,
-    /\b(\d{1,3})\s*(?:horas?|h)\b/
+    /(?:em|daqui a|daqui|dentro de)\s+(\d{1,3}|[a-z]+)\s*(?:horas?|h)\b/,
+    /\b(\d{1,3}|[a-z]+)\s*(?:horas?|h)\b/
   ];
   for (const pattern of hourPatterns) {
     const match = n.match(pattern);
     if (match) {
-      const hours = Number(match[1]);
+      const hours = parseDelayAmount(match[1]);
       if (hours > 0 && hours <= 168) {
         return DateTime.now().setZone(timeZone).plus({ hours }).toUTC().toJSDate();
       }
@@ -132,6 +169,7 @@ export function parseReminderSchedule(text, timeZone) {
 }
 
 function scheduleAtLocalTimeFromText(text, timeZone) {
+  if (textLooksRelativeDelay(text)) return null;
   const time = parseClockTime(text);
   if (!time) return null;
   const n = String(text)
@@ -142,14 +180,23 @@ function scheduleAtLocalTimeFromText(text, timeZone) {
   return scheduleAtLocalTime(timeZone, time, text);
 }
 
-/** HH:MM a partir do texto (18h, às 18:30). */
+/** HH:MM a partir do texto (18h, às 18:30) — ignora "2 minutos". */
 export function parseClockTime(text) {
+  if (textLooksRelativeDelay(text)) return null;
+
   const matches = [
-    ...String(text || "").matchAll(/(?:\b(?:as|às|a)\s*)?([01]?\d|2[0-3])(?:(?:[:hH])([0-5]\d)?|h)?\b/gi)
+    ...String(text || "").matchAll(
+      /(?:\b(?:as|às)\s*)?([01]?\d|2[0-3])(?:(?:[:hH])([0-5]\d)?|h)\b/gi
+    )
   ];
   if (!matches.length) return null;
   const match = matches[0];
   return `${match[1].padStart(2, "0")}:${match[2] || "00"}`;
+}
+
+/** Hora local legível para confirmar ao utilizador. */
+export function formatScheduledInZone(date, timeZone) {
+  return DateTime.fromJSDate(date, { zone: "utc" }).setZone(timeZone).toFormat("HH:mm");
 }
 
 export function formatTimezoneLabel(timeZone) {

@@ -90,7 +90,7 @@ Texto simples:
 2. **Como pedir:**  
    - Uma mensagem: `lembra-me de comprar pão às 18h`  
    - Ou: `lembra-me de X` → responde `18h` ou `com horário` e depois `18h`
-3. **Plano free Render:** o serviço **adormece** sem tráfego — lembretes só disparam com o servidor acordado. Usa [cron-job.org](https://cron-job.org) (grátis) para pedir `https://joana-puwe.onrender.com/health` de **5 em 5 minutos**.
+3. **Plano free Render:** o serviço **adormece** sem tráfego. Para lembretes “daqui a 2 min”, o cron em `/health` deve ser **de 1 em 1 minuto** (ou 2 min), não de 5 em 5 — cada ping também **dispara** lembretes em atraso.
 4. **Dados:** sem disco persistente na Render, um redeploy pode apagar lembretes guardados. Opção paga: disco + `JOANA_DATA_DIR`.
 
 Nos logs, quando agenda: `[Joana] Lembrete agendado (once) …`. Quando envia: `[Joana] Lembrete a enviar …`.

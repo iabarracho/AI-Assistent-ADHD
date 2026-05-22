@@ -46,7 +46,10 @@ const agent = new JoanaAgent(store, messenger);
 
 if (config.messenger === "telegram") {
   if (config.telegram.botToken) {
-    startTelegramPolling((chatId, text) => agent.receive(chatId, text));
+    startTelegramPolling(async (chatId, text) => {
+      await agent.receive(chatId, text);
+      await agent.tick();
+    });
     resolveTelegramBotUsername().catch(() => {});
   } else {
     console.error("[Joana] JOANA_MESSENGER=telegram mas TELEGRAM_BOT_TOKEN em falta");
@@ -105,13 +108,14 @@ function joinRateOk(ip) {
 
 setInterval(() => {
   agent.tick().catch((error) => console.error("Reminder tick failed", error));
-}, 30 * 1000);
+}, 10 * 1000);
 
 const server = http.createServer(async (request, response) => {
   try {
     const url = new URL(request.url, `http://${request.headers.host}`);
 
     if (request.method === "GET" && url.pathname === "/health") {
+      await agent.tick().catch((error) => console.error("Reminder tick on /health failed", error));
       return sendJson(response, 200, {
         ok: true,
         name: "Joana",

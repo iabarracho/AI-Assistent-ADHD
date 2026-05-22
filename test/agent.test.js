@@ -262,6 +262,25 @@ test("Joana assumes no defined time only after no reply", async () => {
   assert.equal(store.state.contacts[PLACEHOLDER_WA_ID].pendingReminder, null);
 });
 
+test("Joana schedules reminder for daqui a X minutos", async () => {
+  fs.rmSync("./data", { recursive: true, force: true });
+
+  const sent = [];
+  const messenger = {
+    sendText: async (to, text) => sent.push({ to, text })
+  };
+
+  const store = new Store();
+  store.updateContact(PLACEHOLDER_WA_ID, { onboardingStep: "done", timezone: "Europe/Lisbon" });
+  const agent = new JoanaAgent(store, messenger);
+
+  await agent.receive(PLACEHOLDER_WA_ID, "lembra-me daqui a 3 minutos de tomar agua");
+
+  assert.equal(store.state.reminders.length, 1);
+  assert.equal(store.state.reminders[0].text, "tomar água");
+  assert.ok(sent.some((m) => m.text.includes("Às") && m.text.includes("tomar")));
+});
+
 test("Joana schedules once reminder in a few minutes", async () => {
   fs.rmSync("./data", { recursive: true, force: true });
 
