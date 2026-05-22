@@ -2,8 +2,8 @@ import { config } from "./config.js";
 import {
   formatTimezoneLabel,
   nextDailyAt as nextDailyAtInZone,
-  parseTimezoneFromText,
-  scheduleAtLocalTime
+  parseReminderSchedule,
+  parseTimezoneFromText
 } from "./timezone.js";
 
 const habits = [
@@ -63,6 +63,20 @@ const onceConfirmations = [
   `Sim senhor, bonito. {text} está guardado.`
 ];
 
+const HELP_TEXT = [
+  `📌 Joana — regras rápidas`,
+  ``,
+  `• Primeira vez: segue o onboarding (hábitos → fuso → horários). Só uma vez.`,
+  `• Lembretes: "lembra-me de comprar pão" ou "lembra-me de X às 18h"`,
+  `• Daqui a pouco: "lembra-me em 2 minutos de X" ou "lembra-me de X em 5 minutos"`,
+  `• Com hora: responde "18h" / "18:30" ou põe a hora na mesma frase`,
+  `• Sem hora fixa: "sem horário" → avisos de 2 em 2 h (até 4)`,
+  `• Fuso (tua hora): "sim" = Lisboa · "fuso Açores" · "fuso Europe/London"`,
+  `• Ajuda: escreve "ajuda" ou "regras"`,
+  ``,
+  `Não precisas de repetir o olá todos os dias.`
+].join("\n");
+
 export class JoanaAgent {
   constructor(store, messenger) {
     this.store = store;
@@ -95,6 +109,11 @@ export class JoanaAgent {
 
     if (contact.onboardingStep === "confirm_timezone") {
       await this.handleTimezoneConfirmation(phone, text);
+      return;
+    }
+
+    if (/^(ajuda|help|regras|comandos|menu|instrucoes|instruções)$/i.test(cleanText.trim())) {
+      await this.messenger.sendText(phone, HELP_TEXT);
       return;
     }
 
@@ -139,9 +158,9 @@ export class JoanaAgent {
     const reminderText = extractReminderText(text);
     if (reminderText) {
       const tz = this.contactTimezone(phone);
-      const at = parseSpecificDate(text, tz);
+      const at = parseReminderSchedule(text, tz);
       if (at) {
-        const label = stripTimeFromReminderText(reminderText) || reminderText;
+        const label = stripScheduleFromReminderText(reminderText, text) || reminderText;
         this.store.addReminder({
           phone,
           kind: "once",
@@ -325,7 +344,7 @@ export class JoanaAgent {
     const contact = this.store.getContact(phone);
     const reminderText = contact.pendingReminder.text;
     const tz = this.contactTimezone(phone);
-    const specificDate = parseSpecificDate(text, tz);
+    const specificDate = parseReminderSchedule(text, tz);
 
     if (specificDate) {
       this.store.addReminder({
@@ -504,8 +523,29 @@ function stripTimeFromReminderText(text) {
     .trim();
 }
 
+function stripScheduleFromReminderText(reminderText, fullText) {
+  let label = reminderText;
+  label = label.replace(
+    /^(?:em|daqui a|dentro de)\s+\d+\s*(?:minutos?|min|m|horas?|h)\s+(?:de|d)\s+/i,
+    ""
+  );
+  label = label.replace(/\s+em\s+\d+\s*(?:minutos?|min|m|horas?|h)\b/gi, "");
+  return stripTimeFromReminderText(label).trim();
+}
+
 function extractReminderText(text) {
   const cleaned = text.trim();
+
+  const relativeWithDe = cleaned.match(
+    /(?:lembra|lembre|lebra|leba|lemba|lemb|recorda|relembra|avisa)\s*-?\s*me\s+em\s+\d+\s*(?:minutos?|min|m|horas?|h)\s+(?:de|d)\s+(.+)/i
+  );
+  if (relativeWithDe?.[1]) return cleanReminderText(relativeWithDe[1]);
+
+  const deWithRelative = cleaned.match(
+    /(?:lembra|lembre|lebra|leba|lemba|lemb|recorda|relembra|avisa)\s*-?\s*me\s+(?:de|d)\s+(.+?)\s+em\s+\d+\s*(?:minutos?|min|m|horas?|h)\b/i
+  );
+  if (deWithRelative?.[1]) return cleanReminderText(deWithRelative[1]);
+
   const directPatterns = [
     /(?:lembra|lembre|lebra|leba|lemba|lemb)\s*-?\s*me\s+(?:de\s+|d\s+)?(.+)/i,
     /(?:lembra|lembre|lebra|leba|lemba|lemb)\s+(?:de\s+|d\s+)?(.+)/i,
@@ -607,8 +647,3 @@ function isSpecificTimeIntent(text) {
   return /\bcom horario\b|\bcom hora\b|\bhorario definido\b|\bhora definida\b|\bhora marcada\b|^com$/i.test(normalize(text));
 }
 
-function parseSpecificDate(text, timeZone) {
-  const time = parseTimes(text)[0];
-  if (!time || isNoSpecificTime(text)) return null;
-  return scheduleAtLocalTime(timeZone, time, text);
-}

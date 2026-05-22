@@ -45,6 +45,39 @@ Podes **remover** ou ignorar as vars WhatsApp (`JOANA_MESSENGER=baileys` etc.) �
 2. Manda **`olá`**.
 3. A Joana deve responder com as mensagens de boas-vindas e o questionário.
 
+## Texto para o Pedro ver no Telegram (BotFather)
+
+No **@BotFather** → `/mybots` → teu bot → **Edit Bot**:
+
+**Description** (copiar):
+
+```
+Joana — lembretes e conversa com piada (presente personalizado).
+
+Regras: manda "ajuda" no chat.
+Lembretes: "lembra-me de …" ou "lembra-me de … às 18h".
+Primeira vez: segue o onboarding (hábitos + hora local); não repetes todos os dias.
+```
+
+**About** (curto):
+
+```
+Lembretes no Telegram. Escreve "ajuda" para regras.
+```
+
+**Commands** (opcional, `/setcommands`):
+
+```
+ajuda - Regras e como usar
+regras - Igual a ajuda
+```
+
+No chat, **ajuda** / **regras** também mostram o menu (código da Joana).
+
+## OpenAI na Render
+
+Variável `OPENAI_API_KEY` — hoje serve sobretudo para **transcrever áudios no WhatsApp**. No **Telegram**, as mensagens são texto; a Joana **não** usa ChatGPT para conversar (só as frases que estão programadas). Podes colocar a chave na Render; não muda muito o Telegram até haver áudio/IA extra.
+
 ## 5. Dar ao Pedro
 
 Texto simples:

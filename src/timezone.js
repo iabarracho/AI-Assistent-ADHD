@@ -85,6 +85,73 @@ export function nextDailyAt(time, timeZone) {
   return scheduleAtLocalTime(timeZone, time, "");
 }
 
+/**
+ * "em 2 minutos", "daqui a 1 hora", "dentro de 30 min"
+ * @returns {Date|null}
+ */
+export function parseRelativeDelay(text, timeZone) {
+  const n = String(text || "")
+    .toLowerCase()
+    .normalize("NFD")
+    .replace(/\p{Diacritic}/gu, "");
+
+  const minutePatterns = [
+    /(?:em|daqui a|dentro de)\s+(\d{1,3})\s*(?:minutos?|min|m)\b/,
+    /\b(\d{1,3})\s*(?:minutos?|min|m)\b/
+  ];
+  for (const pattern of minutePatterns) {
+    const match = n.match(pattern);
+    if (match) {
+      const minutes = Number(match[1]);
+      if (minutes > 0 && minutes <= 24 * 60) {
+        return DateTime.now().setZone(timeZone).plus({ minutes }).toUTC().toJSDate();
+      }
+    }
+  }
+
+  const hourPatterns = [
+    /(?:em|daqui a|dentro de)\s+(\d{1,3})\s*(?:horas?|h)\b/,
+    /\b(\d{1,3})\s*(?:horas?|h)\b/
+  ];
+  for (const pattern of hourPatterns) {
+    const match = n.match(pattern);
+    if (match) {
+      const hours = Number(match[1]);
+      if (hours > 0 && hours <= 168) {
+        return DateTime.now().setZone(timeZone).plus({ hours }).toUTC().toJSDate();
+      }
+    }
+  }
+
+  return null;
+}
+
+/** Hora fixa (18h) ou daqui a X minutos/horas. */
+export function parseReminderSchedule(text, timeZone) {
+  return parseRelativeDelay(text, timeZone) || scheduleAtLocalTimeFromText(text, timeZone);
+}
+
+function scheduleAtLocalTimeFromText(text, timeZone) {
+  const time = parseClockTime(text);
+  if (!time) return null;
+  const n = String(text)
+    .toLowerCase()
+    .normalize("NFD")
+    .replace(/\p{Diacritic}/gu, "");
+  if (/\bsem horario\b|\bsem hora\b/.test(n)) return null;
+  return scheduleAtLocalTime(timeZone, time, text);
+}
+
+/** HH:MM a partir do texto (18h, às 18:30). */
+export function parseClockTime(text) {
+  const matches = [
+    ...String(text || "").matchAll(/(?:\b(?:as|às|a)\s*)?([01]?\d|2[0-3])(?:(?:[:hH])([0-5]\d)?|h)?\b/gi)
+  ];
+  if (!matches.length) return null;
+  const match = matches[0];
+  return `${match[1].padStart(2, "0")}:${match[2] || "00"}`;
+}
+
 export function formatTimezoneLabel(timeZone) {
   try {
     const label = new Intl.DateTimeFormat("pt-PT", {
