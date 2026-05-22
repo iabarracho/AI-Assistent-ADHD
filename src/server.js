@@ -23,6 +23,7 @@ import {
 } from "./baileys.js";
 import { renderDataDeletionPage, renderPrivacyPage, renderTermsPage } from "./legalPages.js";
 import { renderChatPage } from "./chatPage.js";
+import { renderGiftPage } from "./giftPage.js";
 
 const store = new Store();
 const whatsappMessenger = new WhatsAppMessenger();
@@ -132,9 +133,21 @@ const server = http.createServer(async (request, response) => {
       });
     }
 
+    if (request.method === "GET" && (url.pathname === "/pedro" || url.pathname === "/presente")) {
+      const botLink =
+        getTelegramBotLink() ||
+        (config.telegram.botUsername ? `https://t.me/${config.telegram.botUsername}` : null);
+      response.writeHead(200, { "Content-Type": "text/html; charset=utf-8" });
+      response.end(renderGiftPage(botLink));
+      return;
+    }
+
     if (request.method === "GET" && url.pathname === "/") {
       response.writeHead(200, { "Content-Type": "text/html; charset=utf-8" });
-      response.end(renderLanding());
+      response.end(config.messenger === "telegram" ? renderGiftPage(
+        getTelegramBotLink() ||
+          (config.telegram.botUsername ? `https://t.me/${config.telegram.botUsername}` : null)
+      ) : renderLanding());
       return;
     }
 

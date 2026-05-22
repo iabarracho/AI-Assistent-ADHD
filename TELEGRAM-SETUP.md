@@ -78,6 +78,16 @@ No chat, **ajuda** / **regras** também mostram o menu (código da Joana).
 
 Variável `OPENAI_API_KEY` — hoje serve sobretudo para **transcrever áudios no WhatsApp**. No **Telegram**, as mensagens são texto; a Joana **não** usa ChatGPT para conversar (só as frases que estão programadas). Podes colocar a chave na Render; não muda muito o Telegram até haver áudio/IA extra.
 
+## Página-surpresa (botão → Telegram)
+
+Depois do deploy, envia ao Pedro **só este link** (o Telegram fica escondido até ele carregar no botão):
+
+**https://joana-puwe.onrender.com/pedro**
+
+(ou `/presente` — é a mesma página)
+
+A página não mostra o link do bot até clicar em **Desbloquear o presente**; depois abre o Telegram sozinho.
+
 ## 5. Dar ao Pedro
 
 Texto simples:
