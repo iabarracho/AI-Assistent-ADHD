@@ -2,15 +2,24 @@ import fs from "node:fs";
 import path from "node:path";
 import pino from "pino";
 import QRCode from "qrcode";
-import makeWASocket, { Browsers, DisconnectReason, useMultiFileAuthState } from "@whiskeysockets/baileys";
+import makeWASocket, {
+  Browsers,
+  DisconnectReason,
+  fetchLatestBaileysVersion,
+  useMultiFileAuthState
+} from "@whiskeysockets/baileys";
 import { config } from "./config.js";
 
 let socket = null;
 let latestQr = null;
 let connectionState = "starting";
+let lastError = "";
 let handlersRef = null;
 let connectGeneration = 0;
 let stuckTimer = null;
+let reconnectAttempts = 0;
+
+const MAX_RECONNECT = 3;
 
 function authDir() {
   const dir = path.join(config.dataDir, "baileys-auth");
@@ -61,15 +70,40 @@ export async function startBaileys(handlers) {
   await connectBaileys();
 }
 
+function shouldStopReconnecting(status) {
+  return (
+    status === 405 ||
+    status === DisconnectReason.loggedOut ||
+    status === DisconnectReason.forbidden ||
+    status === DisconnectReason.multideviceMismatch ||
+    status === DisconnectReason.badSession
+  );
+}
+
+function describeDisconnect(status) {
+  if (status === 405) {
+    return "WhatsApp recusou a ligação (405). Comum com número só na API Cloud ou IP de datacenter (Render). Tenta no teu PC com npm start.";
+  }
+  if (status === DisconnectReason.multideviceMismatch) {
+    return "Multi-dispositivo não disponível neste número.";
+  }
+  if (status === DisconnectReason.loggedOut) {
+    return "Sessão terminada. Gera novo QR.";
+  }
+  return `Ligação fechada (código ${status ?? "?"}).`;
+}
+
 async function connectBaileys() {
   const generation = ++connectGeneration;
   connectionState = "connecting";
   latestQr = null;
   scheduleStuckCheck();
 
+  const { version } = await fetchLatestBaileysVersion();
   const { state, saveCreds } = await useMultiFileAuthState(authDir());
 
   socket = makeWASocket({
+    version,
     auth: state,
     logger: pino({ level: "silent" }),
     printQRInTerminal: false,
@@ -91,24 +125,34 @@ async function connectBaileys() {
     if (connection === "open") {
       latestQr = null;
       connectionState = "open";
+      lastError = "";
+      reconnectAttempts = 0;
       if (stuckTimer) clearTimeout(stuckTimer);
       console.log("[Joana] Baileys ligado ao WhatsApp");
     }
     if (connection === "close") {
       const status = lastDisconnect?.error?.output?.statusCode;
-      const loggedOut = status === DisconnectReason.loggedOut;
-      console.warn("[Joana] Baileys desligado", status ?? "");
-      if (loggedOut) {
+      lastError = describeDisconnect(status);
+      console.warn("[Joana] Baileys desligado", status ?? "", "-", lastError);
+
+      if (status === DisconnectReason.restartRequired) {
         clearAuthDir();
-        connectionState = "qr";
-      } else {
-        connectionState = "closed";
-      }
-      if (!loggedOut && status !== DisconnectReason.loggedOut) {
-        setTimeout(() => connectBaileys().catch((e) => console.error(e.message)), 3000);
-      } else if (loggedOut) {
         setTimeout(() => connectBaileys().catch((e) => console.error(e.message)), 2000);
+        return;
       }
+
+      if (shouldStopReconnecting(status) || reconnectAttempts >= MAX_RECONNECT) {
+        reconnectAttempts = 0;
+        clearAuthDir();
+        connectionState = "error";
+        latestQr = null;
+        if (stuckTimer) clearTimeout(stuckTimer);
+        return;
+      }
+
+      reconnectAttempts += 1;
+      connectionState = "closed";
+      setTimeout(() => connectBaileys().catch((e) => console.error(e.message)), 5000);
     }
   });
 
@@ -154,7 +198,7 @@ export async function resetBaileysSession() {
 }
 
 export function getBaileysStatus() {
-  return { state: connectionState, hasQr: Boolean(latestQr) };
+  return { state: connectionState, hasQr: Boolean(latestQr), error: lastError || null };
 }
 
 export async function getBaileysQrDataUrl() {
@@ -197,6 +241,11 @@ export function renderBaileysLinkPage() {
       const img = document.getElementById("qr");
       if (data.state === "open") {
         status.innerHTML = '<span class="ok">Ligado. Fecha esta página e manda olá no WhatsApp.</span>';
+        img.hidden = true;
+        return;
+      }
+      if (data.state === "error" && data.error) {
+        status.textContent = data.error;
         img.hidden = true;
         return;
       }
