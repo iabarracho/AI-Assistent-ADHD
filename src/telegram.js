@@ -1,7 +1,32 @@
 import { config } from "./config.js";
 
+let cachedBotUsername = config.telegram.botUsername || null;
+
 function isConfigured() {
   return Boolean(config.telegram.botToken);
+}
+
+/** @returns {Promise<string|null>} username sem @ */
+export async function resolveTelegramBotUsername() {
+  if (cachedBotUsername) return cachedBotUsername;
+  if (!isConfigured()) return null;
+
+  const response = await fetch(`https://api.telegram.org/bot${config.telegram.botToken}/getMe`);
+  if (!response.ok) {
+    console.error("[Joana] Telegram getMe failed:", response.status, await response.text());
+    return null;
+  }
+
+  const data = await response.json();
+  const username = data.result?.username;
+  if (username) cachedBotUsername = username;
+  return username || null;
+}
+
+/** Link público t.me/... ou null */
+export function getTelegramBotLink() {
+  if (!cachedBotUsername) return null;
+  return `https://t.me/${cachedBotUsername}`;
 }
 
 export async function sendTelegramText(chatId, text) {
@@ -54,7 +79,9 @@ export function startTelegramPolling(onMessage) {
         const message = update.message;
         const text = message?.text?.trim();
         if (!message?.chat?.id || !text) continue;
-        await onMessage(String(message.chat.id), text);
+        const chatId = String(message.chat.id);
+        console.log(`[Joana] Telegram <- ${chatId}: ${text.slice(0, 80)}`);
+        await onMessage(chatId, text);
       }
     } catch (error) {
       console.error("[Joana] Telegram polling error:", error.message);
@@ -63,7 +90,13 @@ export function startTelegramPolling(onMessage) {
     }
   };
 
-  console.log("[Joana] Telegram ativo (long polling)");
+  resolveTelegramBotUsername()
+    .then((username) => {
+      if (username) console.log(`[Joana] Telegram ativo — @${username} (long polling)`);
+      else console.log("[Joana] Telegram ativo (long polling)");
+    })
+    .catch(() => console.log("[Joana] Telegram ativo (long polling)"));
+
   tick();
   setInterval(tick, 1000);
 }

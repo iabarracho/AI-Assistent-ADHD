@@ -32,7 +32,7 @@ test("startSignupWhatsApp sends welcome only for brand-new contacts", async () =
   assert.equal(second, "in_progress");
   assert.equal(sent.length, 3);
 
-  store.updateContact(PLACEHOLDER_WA_ID_2, { onboardingStep: "done" });
+  store.updateContact(PLACEHOLDER_WA_ID_2, { onboardingStep: "done", timezone: "Europe/Lisbon" });
   const third = await agent.startSignupWhatsApp(PLACEHOLDER_WA_ID_2);
   assert.equal(third, "done");
   assert.equal(sent.length, 3);
@@ -51,6 +51,7 @@ test("Joana runs onboarding and creates reminders", async () => {
 
   await agent.receive(PLACEHOLDER_WA_ID, "ola");
   await agent.receive(PLACEHOLDER_WA_ID, "1, 2, 4");
+  await agent.receive(PLACEHOLDER_WA_ID, "sim");
   await agent.receive(PLACEHOLDER_WA_ID, "09:00 e 21:30");
   await agent.receive(PLACEHOLDER_WA_ID, "18h");
   await agent.receive(PLACEHOLDER_WA_ID, "10:15");
@@ -71,7 +72,7 @@ test("Joana creates a two-hour repeat reminder without a specific time", async (
   };
 
   const store = new Store();
-  store.updateContact(PLACEHOLDER_WA_ID, { onboardingStep: "done" });
+  store.updateContact(PLACEHOLDER_WA_ID, { onboardingStep: "done", timezone: "Europe/Lisbon" });
   const agent = new JoanaAgent(store, messenger);
 
   await agent.receive(PLACEHOLDER_WA_ID, "lembra-me de comprar pão");
@@ -124,7 +125,7 @@ test("Joana avoids repeating the same dynamic reply twice in a row", async () =>
   };
 
   const store = new Store();
-  store.updateContact(PLACEHOLDER_WA_ID, { onboardingStep: "done" });
+  store.updateContact(PLACEHOLDER_WA_ID, { onboardingStep: "done", timezone: "Europe/Lisbon" });
   const agent = new JoanaAgent(store, messenger);
 
   await agent.receive(PLACEHOLDER_WA_ID, "hmm");
@@ -143,7 +144,7 @@ test("Joana keeps dynamic messages short", async () => {
   };
 
   const store = new Store();
-  store.updateContact(PLACEHOLDER_WA_ID, { onboardingStep: "done" });
+  store.updateContact(PLACEHOLDER_WA_ID, { onboardingStep: "done", timezone: "Europe/Lisbon" });
   const agent = new JoanaAgent(store, messenger);
 
   await agent.receive(PLACEHOLDER_WA_ID, "lembra-me de comprar pão");
@@ -167,7 +168,7 @@ test("Joana understands messy reminder spelling", async () => {
   };
 
   const store = new Store();
-  store.updateContact(PLACEHOLDER_WA_ID, { onboardingStep: "done" });
+  store.updateContact(PLACEHOLDER_WA_ID, { onboardingStep: "done", timezone: "Europe/Lisbon" });
   const agent = new JoanaAgent(store, messenger);
 
   await agent.receive(PLACEHOLDER_WA_ID, "leba me disto");
@@ -187,7 +188,7 @@ test("Joana corrects spelling in saved reminders", async () => {
   };
 
   const store = new Store();
-  store.updateContact(PLACEHOLDER_WA_ID, { onboardingStep: "done" });
+  store.updateContact(PLACEHOLDER_WA_ID, { onboardingStep: "done", timezone: "Europe/Lisbon" });
   const agent = new JoanaAgent(store, messenger);
 
   await agent.receive(PLACEHOLDER_WA_ID, "lemb me de comprar pao");
@@ -206,7 +207,7 @@ test("Joana asks whether a reminder has a defined time", async () => {
   };
 
   const store = new Store();
-  store.updateContact(PLACEHOLDER_WA_ID, { onboardingStep: "done" });
+  store.updateContact(PLACEHOLDER_WA_ID, { onboardingStep: "done", timezone: "Europe/Lisbon" });
   const agent = new JoanaAgent(store, messenger);
 
   await agent.receive(PLACEHOLDER_WA_ID, "lembra-me de beber agua");
@@ -223,7 +224,7 @@ test("Joana does not treat vague answers as no defined time", async () => {
   };
 
   const store = new Store();
-  store.updateContact(PLACEHOLDER_WA_ID, { onboardingStep: "done" });
+  store.updateContact(PLACEHOLDER_WA_ID, { onboardingStep: "done", timezone: "Europe/Lisbon" });
   const agent = new JoanaAgent(store, messenger);
 
   await agent.receive(PLACEHOLDER_WA_ID, "lembra-me de comprar pao");
@@ -243,7 +244,7 @@ test("Joana assumes no defined time only after no reply", async () => {
   };
 
   const store = new Store();
-  store.updateContact(PLACEHOLDER_WA_ID, { onboardingStep: "done" });
+  store.updateContact(PLACEHOLDER_WA_ID, { onboardingStep: "done", timezone: "Europe/Lisbon" });
   const agent = new JoanaAgent(store, messenger);
 
   await agent.receive(PLACEHOLDER_WA_ID, "lembra-me de comprar pao");
@@ -261,6 +262,27 @@ test("Joana assumes no defined time only after no reply", async () => {
   assert.equal(store.state.contacts[PLACEHOLDER_WA_ID].pendingReminder, null);
 });
 
+test("Joana schedules once reminder when time is in the same message", async () => {
+  fs.rmSync("./data", { recursive: true, force: true });
+
+  const sent = [];
+  const messenger = {
+    sendText: async (to, text) => sent.push({ to, text })
+  };
+
+  const store = new Store();
+  store.updateContact(PLACEHOLDER_WA_ID, { onboardingStep: "done", timezone: "Europe/Lisbon" });
+  const agent = new JoanaAgent(store, messenger);
+
+  await agent.receive(PLACEHOLDER_WA_ID, "lembra-me de comprar pão às 18h");
+
+  assert.equal(store.state.reminders.length, 1);
+  assert.equal(store.state.reminders[0].kind, "once");
+  assert.equal(store.state.reminders[0].text, "comprar pão");
+  assert.equal(store.state.contacts[PLACEHOLDER_WA_ID].pendingReminder, null);
+  assert.ok(sent.some((message) => message.text.includes("comprar pão")));
+});
+
 test("Joana asks for the exact time when Pedro says it has a time", async () => {
   fs.rmSync("./data", { recursive: true, force: true });
 
@@ -270,7 +292,7 @@ test("Joana asks for the exact time when Pedro says it has a time", async () => 
   };
 
   const store = new Store();
-  store.updateContact(PLACEHOLDER_WA_ID, { onboardingStep: "done" });
+  store.updateContact(PLACEHOLDER_WA_ID, { onboardingStep: "done", timezone: "Europe/Lisbon" });
   const agent = new JoanaAgent(store, messenger);
 
   await agent.receive(PLACEHOLDER_WA_ID, "lembra-me de beber agua");
@@ -291,7 +313,7 @@ test("Joana understands alternate reminder wording", async () => {
   };
 
   const store = new Store();
-  store.updateContact(PLACEHOLDER_WA_ID, { onboardingStep: "done" });
+  store.updateContact(PLACEHOLDER_WA_ID, { onboardingStep: "done", timezone: "Europe/Lisbon" });
   const agent = new JoanaAgent(store, messenger);
 
   await agent.receive(PLACEHOLDER_WA_ID, "n me deixes eskecer de ligar à Tuxa");

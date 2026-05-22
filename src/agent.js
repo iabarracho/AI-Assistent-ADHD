@@ -1,3 +1,11 @@
+import { config } from "./config.js";
+import {
+  formatTimezoneLabel,
+  nextDailyAt as nextDailyAtInZone,
+  parseTimezoneFromText,
+  scheduleAtLocalTime
+} from "./timezone.js";
+
 const habits = [
   { id: "medicacao", label: "medicação" },
   { id: "ginasio", label: "ginásio" },
@@ -76,9 +84,29 @@ export class JoanaAgent {
     return "started";
   }
 
+  contactTimezone(phone) {
+    const contact = this.store.getContact(phone);
+    return contact.timezone || config.defaultTimezone;
+  }
+
   async receive(phone, text) {
     const contact = this.store.getContact(phone);
     const cleanText = normalize(text);
+
+    if (contact.onboardingStep === "confirm_timezone") {
+      await this.handleTimezoneConfirmation(phone, text);
+      return;
+    }
+
+    const explicitTz = parseTimezoneFromText(text);
+    if (explicitTz && /\b(fuso|timezone|tz|horario|horário)\b/i.test(text)) {
+      this.store.updateContact(phone, { timezone: explicitTz });
+      await this.messenger.sendText(
+        phone,
+        `Fuso atualizado: ${formatTimezoneLabel(explicitTz)}. Os lembretes usam a tua hora local.`
+      );
+      return;
+    }
 
     if (contact.onboardingStep === "new") {
       await this.sendWelcome(phone);
@@ -102,8 +130,32 @@ export class JoanaAgent {
       return;
     }
 
+    if (contact.onboardingStep === "done" && !contact.timezone) {
+      this.store.updateContact(phone, { onboardingStep: "confirm_timezone" });
+      await this.askTimezone(phone);
+      return;
+    }
+
     const reminderText = extractReminderText(text);
     if (reminderText) {
+      const tz = this.contactTimezone(phone);
+      const at = parseSpecificDate(text, tz);
+      if (at) {
+        const label = stripTimeFromReminderText(reminderText) || reminderText;
+        this.store.addReminder({
+          phone,
+          kind: "once",
+          text: label,
+          nextAt: at.toISOString(),
+          maxSends: 1
+        });
+        console.log(
+          `[Joana] Lembrete agendado (once) ${label} → ${at.toISOString()} (${tz})`
+        );
+        await this.sendVariant(phone, "once_confirmation", onceConfirmations, label, label);
+        return;
+      }
+
       this.store.updateContact(phone, {
         pendingReminder: {
           text: reminderText,
@@ -122,11 +174,13 @@ export class JoanaAgent {
     await this.expirePendingReminderQuestions();
     const due = this.store.dueReminders();
     for (const reminder of due) {
+      console.log(`[Joana] Lembrete a enviar (${reminder.kind}) → ${reminder.phone}: ${reminder.text}`);
       await this.messenger.sendText(reminder.phone, reminderNudge(reminder));
 
       if (reminder.kind === "daily") {
+        const tz = this.contactTimezone(reminder.phone);
         this.store.updateReminder(reminder.id, {
-          nextAt: nextDailyAt(reminder.time).toISOString(),
+          nextAt: nextDailyAtInZone(reminder.time, tz).toISOString(),
           sentCount: reminder.sentCount + 1
         });
         continue;
@@ -175,10 +229,51 @@ export class JoanaAgent {
     this.store.updateContact(phone, {
       selectedHabits: selected,
       pendingHabitIndex: 0,
-      onboardingStep: "set_habit_times"
+      onboardingStep: "confirm_timezone"
     });
 
-    await this.askNextHabitTime(phone);
+    await this.askTimezone(phone);
+  }
+
+  async askTimezone(phone) {
+    await this.messenger.sendText(
+      phone,
+      [
+        `Antes dos horários, ${defaultName}: os lembretes usam a **tua** hora (a do teu Telegram/telemóvel).`,
+        "Estás em Portugal continental (Lisboa)? Responde **sim**.",
+        "Ou diz o fuso: **Açores**, **Madeira**, **fuso Europe/London**, etc."
+      ].join("\n")
+    );
+  }
+
+  async handleTimezoneConfirmation(phone, text) {
+    const zone = parseTimezoneFromText(text);
+    if (!zone) {
+      await this.messenger.sendText(
+        phone,
+        "Não percebi o fuso. Responde **sim** (Lisboa) ou, por exemplo, **Açores** / **fuso Europe/Lisbon**."
+      );
+      return;
+    }
+
+    this.store.updateContact(phone, { timezone: zone });
+    const contact = this.store.getContact(phone);
+
+    if (contact.selectedHabits?.length && contact.onboardingStep === "confirm_timezone") {
+      this.store.updateContact(phone, { onboardingStep: "set_habit_times" });
+      await this.messenger.sendText(
+        phone,
+        `Perfeito — hora de ${formatTimezoneLabel(zone)}. Agora os horários dos hábitos.`
+      );
+      await this.askNextHabitTime(phone);
+      return;
+    }
+
+    this.store.updateContact(phone, { onboardingStep: "done" });
+    await this.messenger.sendText(
+      phone,
+      `Feito. Lembretes na hora de ${formatTimezoneLabel(zone)}. Manda "lembra-me de...".`
+    );
   }
 
   async askNextHabitTime(phone) {
@@ -208,13 +303,14 @@ export class JoanaAgent {
       return;
     }
 
+    const tz = this.contactTimezone(phone);
     for (const time of times) {
       this.store.addReminder({
         phone,
         kind: "daily",
         text: habit.label,
         time,
-        nextAt: nextDailyAt(time).toISOString()
+        nextAt: nextDailyAtInZone(time, tz).toISOString()
       });
     }
 
@@ -228,8 +324,8 @@ export class JoanaAgent {
   async handlePendingReminderTime(phone, text) {
     const contact = this.store.getContact(phone);
     const reminderText = contact.pendingReminder.text;
-    const step = contact.pendingReminder.step || "time_choice";
-    const specificDate = parseSpecificDate(text);
+    const tz = this.contactTimezone(phone);
+    const specificDate = parseSpecificDate(text, tz);
 
     if (specificDate) {
       this.store.addReminder({
@@ -239,6 +335,9 @@ export class JoanaAgent {
         nextAt: specificDate.toISOString(),
         maxSends: 1
       });
+      console.log(
+        `[Joana] Lembrete agendado (once) ${reminderText} → ${specificDate.toISOString()} (${tz})`
+      );
       this.store.updateContact(phone, { pendingReminder: null });
       await this.sendVariant(phone, "once_confirmation", onceConfirmations, reminderText, reminderText);
       return;
@@ -390,8 +489,19 @@ function parseHabitSelection(text) {
 }
 
 function parseTimes(text) {
-  const matches = [...text.matchAll(/\b([01]?\d|2[0-3])(?:(?:[:hH])([0-5]\d)?)?\b/g)];
+  const matches = [
+    ...text.matchAll(/(?:\b(?:as|às|a)\s*)?([01]?\d|2[0-3])(?:(?:[:hH])([0-5]\d)?|h)?\b/gi)
+  ];
   return [...new Set(matches.map((match) => `${match[1].padStart(2, "0")}:${match[2] || "00"}`))];
+}
+
+function stripTimeFromReminderText(text) {
+  return text
+    .replace(/(?:^|\s)(?:as|às|a)\s*\d{1,2}(?:(?:[:hH][0-5]?\d?)|h)\b/gi, "")
+    .replace(/(?:^|\s)(?:as|às|a)\s*\d{1,2}:\d{2}\b/gi, "")
+    .replace(/\b(?:amanha|amanhã)\b/gi, "")
+    .replace(/\s{2,}/g, " ")
+    .trim();
 }
 
 function extractReminderText(text) {
@@ -489,36 +599,16 @@ function editDistance(a, b) {
 }
 
 function isNoSpecificTime(text) {
-  return /sem horario|sem hora|nao|não|tanto faz|quando der|sem/i.test(normalize(text));
+  const n = normalize(text);
+  return /sem horario|sem hora|\bsem\b|nao|não|tanto faz|quando der/.test(n);
 }
 
 function isSpecificTimeIntent(text) {
   return /\bcom horario\b|\bcom hora\b|\bhorario definido\b|\bhora definida\b|\bhora marcada\b|^com$/i.test(normalize(text));
 }
 
-function parseSpecificDate(text) {
+function parseSpecificDate(text, timeZone) {
   const time = parseTimes(text)[0];
   if (!time || isNoSpecificTime(text)) return null;
-
-  const now = new Date();
-  const [hours, minutes] = time.split(":").map(Number);
-  const target = new Date(now);
-  target.setHours(hours, minutes, 0, 0);
-
-  if (/amanha|amanhã/i.test(text)) {
-    target.setDate(target.getDate() + 1);
-  } else if (target <= now) {
-    target.setDate(target.getDate() + 1);
-  }
-
-  return target;
-}
-
-function nextDailyAt(time) {
-  const now = new Date();
-  const [hours, minutes] = time.split(":").map(Number);
-  const next = new Date(now);
-  next.setHours(hours, minutes, 0, 0);
-  if (next <= now) next.setDate(next.getDate() + 1);
-  return next;
+  return scheduleAtLocalTime(timeZone, time, text);
 }

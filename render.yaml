@@ -1,5 +1,6 @@
 # Blueprint Render — https://render.com/docs/blueprint-spec
-# Depois do deploy: copia o URL HTTPS (ex. https://joana.onrender.com) para o webhook da Meta: https://.../webhook
+# Telegram: JOANA_MESSENGER=telegram + TELEGRAM_BOT_TOKEN (ver TELEGRAM-SETUP.md)
+# WhatsApp Meta: callback https://.../webhook
 
 services:
   - type: web

@@ -7,7 +7,12 @@ import { JoanaAgent } from "./agent.js";
 import { normalizeWaPhone, PLACEHOLDER_WA_ID } from "./phone.js";
 import { verifyMetaWebhookSignature } from "./webhookVerify.js";
 import { WhatsAppMessenger, parseCloudWebhook, parseRequestBody } from "./whatsapp.js";
-import { sendTelegramText, startTelegramPolling } from "./telegram.js";
+import {
+  getTelegramBotLink,
+  resolveTelegramBotUsername,
+  sendTelegramText,
+  startTelegramPolling
+} from "./telegram.js";
 import {
   getBaileysQrDataUrl,
   getBaileysQrPng,
@@ -39,8 +44,13 @@ const messenger = {
 };
 const agent = new JoanaAgent(store, messenger);
 
-if (config.messenger === "telegram" && config.telegram.botToken) {
-  startTelegramPolling((chatId, text) => agent.receive(chatId, text));
+if (config.messenger === "telegram") {
+  if (config.telegram.botToken) {
+    startTelegramPolling((chatId, text) => agent.receive(chatId, text));
+    resolveTelegramBotUsername().catch(() => {});
+  } else {
+    console.error("[Joana] JOANA_MESSENGER=telegram mas TELEGRAM_BOT_TOKEN em falta");
+  }
 }
 
 if (config.messenger === "baileys") {
@@ -112,7 +122,8 @@ const server = http.createServer(async (request, response) => {
           appSecret: Boolean(config.cloud.appSecret)
         },
         telegram: {
-          botToken: Boolean(config.telegram.botToken)
+          botToken: Boolean(config.telegram.botToken),
+          botLink: getTelegramBotLink() || (config.telegram.botUsername ? `https://t.me/${config.telegram.botUsername}` : null)
         }
       });
     }
@@ -145,6 +156,12 @@ const server = http.createServer(async (request, response) => {
       response.writeHead(200, { "Content-Type": "text/html; charset=utf-8" });
       response.end(renderChatPage());
       return;
+    }
+
+    if (url.pathname.startsWith("/wa/") && config.messenger !== "baileys") {
+      return sendJson(response, 404, {
+        error: "WhatsApp Web (Baileys) desligado. Usa Telegram ou WHATSAPP API (JOANA_MESSENGER)."
+      });
     }
 
     if (request.method === "GET" && url.pathname === "/wa/link") {
@@ -282,7 +299,8 @@ const server = http.createServer(async (request, response) => {
 
 server.listen(config.port, () => {
   console.log(`Joana is listening on http://localhost:${config.port}`);
-  if (isProduction()) {
+  console.log(`[Joana] Canal ativo: ${config.messenger}`);
+  if (isProduction() && config.messenger === "whatsapp") {
     if (config.cloud.verifyToken === "joana-local-dev") {
       console.warn("[Joana] Produção: define WHATSAPP_VERIFY_TOKEN forte no .env (não uses o valor por defeito).");
     }
@@ -326,6 +344,14 @@ async function handleJoin(request, response) {
   const ip = clientIp(request);
   if (!joinRateOk(ip)) {
     return sendJson(response, 429, { error: "Demasiados pedidos. Tenta mais tarde." });
+  }
+
+  if (config.messenger === "telegram") {
+    const link = getTelegramBotLink() || (config.telegram.botUsername ? `https://t.me/${config.telegram.botUsername}` : null);
+    const hint = link
+      ? `Abre o Telegram e fala com a Joana: ${link} — manda «olá» para começar.`
+      : "Abre o Telegram, procura o bot da Joana e manda «olá» para começar.";
+    return sendJson(response, 400, { error: hint });
   }
 
   const body = await parseRequestBody(request);
@@ -392,6 +418,10 @@ function sendJson(response, statusCode, payload) {
 }
 
 function renderLanding() {
+  if (config.messenger === "telegram") {
+    return renderTelegramLanding();
+  }
+
   const devHint = devChatEnabled()
     ? `<p class="foot"><a href="/dev">Chat de desenvolvimento</a> · <a href="/demo.html">Demo só no browser</a></p>`
     : "";
@@ -487,6 +517,62 @@ function renderLanding() {
       }
     });
   </script>
+</body>
+</html>`;
+}
+
+function renderTelegramLanding() {
+  const link = getTelegramBotLink() || (config.telegram.botUsername ? `https://t.me/${config.telegram.botUsername}` : null);
+  const handle = config.telegram.botUsername ? `@${config.telegram.botUsername}` : link ? link.replace("https://t.me/", "@") : "o bot da Joana";
+  const cta = link
+    ? `<a class="tg-btn" href="${link}" rel="noopener">Abrir no Telegram</a>`
+    : `<p class="tg-note">Procura <strong>${handle}</strong> na app Telegram e manda <strong>olá</strong>.</p>`;
+
+  return `<!doctype html>
+<html lang="pt">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Joana — Telegram</title>
+  <style>
+    :root { color-scheme: light; font-family: Georgia, "Times New Roman", serif; }
+    body { margin: 0; min-height: 100vh; background: #f5f1ea; color: #221f1c; }
+    .wrap { max-width: 520px; margin: 0 auto; padding: 48px 20px 32px; }
+    h1 { font-size: 2rem; margin: 0 0 8px; color: #264653; }
+    .tag { font-family: system-ui, sans-serif; font-size: 0.95rem; color: #5c5348; line-height: 1.5; }
+    .card {
+      font-family: system-ui, sans-serif;
+      background: #fffaf2;
+      border: 1px solid #ded4c7;
+      border-radius: 12px;
+      padding: 24px 22px;
+      margin-top: 24px;
+    }
+    ol { margin: 0; padding-left: 1.2rem; line-height: 1.6; color: #3d3830; }
+    .tg-btn {
+      display: block; text-align: center; margin-top: 20px;
+      font-size: 1.05rem; font-weight: 600; padding: 14px 18px;
+      border-radius: 8px; background: #0088cc; color: white; text-decoration: none;
+    }
+    .tg-note { margin-top: 16px; font-size: 0.95rem; }
+    .legal { margin-top: 28px; font-size: 0.75rem; color: #8a8278; }
+    .legal a { color: #264653; }
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <h1>Tens a tua Joana</h1>
+    <p class="tag">Lembretes e conversa no <strong>Telegram</strong> — a sério, mas com piada.</p>
+    <div class="card">
+      <ol>
+        <li>Instala o <strong>Telegram</strong> (se ainda não tiveres).</li>
+        <li>Abre ${handle}.</li>
+        <li>Manda <strong>olá</strong> — a Joana responde na hora.</li>
+      </ol>
+      ${cta}
+    </div>
+    <p class="legal"><a href="/privacy">Privacidade</a> · <a href="/terms">Termos</a></p>
+  </div>
 </body>
 </html>`;
 }

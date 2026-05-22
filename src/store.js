@@ -36,6 +36,7 @@ export class Store {
       this.state.contacts[phone] = {
         phone,
         onboardingStep: "new",
+        timezone: null,
         selectedHabits: [],
         pendingHabitIndex: 0,
         pendingReminder: null,

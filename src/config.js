@@ -25,11 +25,15 @@ export const config = {
     ? path.resolve(process.env.JOANA_DATA_DIR)
     : path.join(rootDir, "data"),
   port: Number(process.env.PORT || 3000),
+  /** Fuso por defeito até o utilizador confirmar o dele (Telegram não envia fuso). */
+  defaultTimezone: process.env.JOANA_DEFAULT_TIMEZONE || "Europe/Lisbon",
   /** whatsapp (API Meta) | baileys (WhatsApp Web, não oficial) | telegram | web */
   messenger: process.env.JOANA_MESSENGER || "whatsapp",
   provider: process.env.WHATSAPP_PROVIDER || "cloud",
   telegram: {
-    botToken: process.env.TELEGRAM_BOT_TOKEN
+    botToken: process.env.TELEGRAM_BOT_TOKEN,
+    /** Opcional: @username do bot (senão obtém-se via getMe ao arrancar) */
+    botUsername: process.env.TELEGRAM_BOT_USERNAME
   },
   cloud: {
     token: process.env.WHATSAPP_TOKEN,
