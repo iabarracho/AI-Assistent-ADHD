@@ -106,7 +106,7 @@ async function connectBaileys() {
     version,
     auth: state,
     logger: pino({ level: "silent" }),
-    printQRInTerminal: false,
+    printQRInTerminal: process.env.JOANA_QR_TERMINAL === "1" || process.env.NODE_ENV !== "production",
     browser: Browsers.macOS("Joana"),
     syncFullHistory: false,
     markOnlineOnConnect: false
@@ -203,7 +203,22 @@ export function getBaileysStatus() {
 
 export async function getBaileysQrDataUrl() {
   if (!latestQr) return null;
-  return QRCode.toDataURL(latestQr, { margin: 1, width: 280 });
+  try {
+    return await QRCode.toDataURL(latestQr, { margin: 2, width: 320, errorCorrectionLevel: "M" });
+  } catch (error) {
+    console.error("[Joana] Falha ao gerar imagem QR:", error.message);
+    return null;
+  }
+}
+
+export async function getBaileysQrPng() {
+  if (!latestQr) return null;
+  try {
+    return await QRCode.toBuffer(latestQr, { type: "png", margin: 2, width: 320, errorCorrectionLevel: "M" });
+  } catch (error) {
+    console.error("[Joana] Falha ao gerar PNG QR:", error.message);
+    return null;
+  }
 }
 
 export function renderBaileysLinkPage() {
@@ -227,6 +242,7 @@ export function renderBaileysLinkPage() {
   <p class="warn">Modo não oficial (WhatsApp Web). Pode haver risco de limitação da conta pela Meta.</p>
   <p id="status">A carregar…</p>
   <img id="qr" alt="QR Code" hidden>
+  <p class="warn"><a id="qrLink" href="/wa/qr.png" target="_blank" hidden>Abrir QR em ecrã inteiro</a></p>
   <button type="button" id="resetBtn">Gerar novo QR</button>
   <ol class="warn">
     <li>No telemóvel com o WhatsApp desse número: <strong>Aparelhos ligados</strong> → <strong>Ligar um aparelho</strong></li>
@@ -249,19 +265,25 @@ export function renderBaileysLinkPage() {
         img.hidden = true;
         return;
       }
-      if (data.qrDataUrl) {
+      if (data.state === "qr" || data.hasQr || data.qrDataUrl) {
         status.textContent = "Escaneia este QR no WhatsApp:";
-        img.src = data.qrDataUrl;
+        const ts = Date.now();
+        img.src = data.qrDataUrl || ("/wa/qr.png?t=" + ts);
         img.hidden = false;
+        const link = document.getElementById("qrLink");
+        link.href = "/wa/qr.png?t=" + ts;
+        link.hidden = false;
       } else {
-        status.textContent = "A aguardar QR… (pode demorar ~30s na primeira vez)";
+        status.textContent = "A aguardar QR… (clica Gerar novo QR ou espera ~30s)";
         img.hidden = true;
+        document.getElementById("qrLink").hidden = true;
       }
     }
     document.getElementById("resetBtn").addEventListener("click", async () => {
       document.getElementById("status").textContent = "A gerar novo QR…";
       await fetch("/wa/reset", { method: "POST" });
-      setTimeout(refresh, 2000);
+      setTimeout(refresh, 1500);
+      setTimeout(refresh, 4000);
     });
     refresh();
     setInterval(refresh, 3000);

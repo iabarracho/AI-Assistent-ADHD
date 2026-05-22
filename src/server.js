@@ -10,6 +10,7 @@ import { WhatsAppMessenger, parseCloudWebhook, parseRequestBody } from "./whatsa
 import { sendTelegramText, startTelegramPolling } from "./telegram.js";
 import {
   getBaileysQrDataUrl,
+  getBaileysQrPng,
   getBaileysStatus,
   renderBaileysLinkPage,
   resetBaileysSession,
@@ -149,6 +150,19 @@ const server = http.createServer(async (request, response) => {
     if (request.method === "GET" && url.pathname === "/wa/link") {
       response.writeHead(200, { "Content-Type": "text/html; charset=utf-8" });
       response.end(renderBaileysLinkPage());
+      return;
+    }
+
+    if (request.method === "GET" && url.pathname === "/wa/qr.png") {
+      const png = await getBaileysQrPng();
+      if (!png) {
+        return sendJson(response, 404, { error: "QR ainda não disponível. Clica Gerar novo QR." });
+      }
+      response.writeHead(200, {
+        "Content-Type": "image/png",
+        "Cache-Control": "no-store, no-cache, must-revalidate"
+      });
+      response.end(png);
       return;
     }
 
