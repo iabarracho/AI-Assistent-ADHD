@@ -2,17 +2,25 @@ import fs from "node:fs";
 import path from "node:path";
 import pino from "pino";
 import QRCode from "qrcode";
-import makeWASocket, { DisconnectReason, useMultiFileAuthState } from "@whiskeysockets/baileys";
+import makeWASocket, { Browsers, DisconnectReason, useMultiFileAuthState } from "@whiskeysockets/baileys";
 import { config } from "./config.js";
 
 let socket = null;
 let latestQr = null;
 let connectionState = "starting";
+let handlersRef = null;
+let connectGeneration = 0;
+let stuckTimer = null;
 
 function authDir() {
   const dir = path.join(config.dataDir, "baileys-auth");
   fs.mkdirSync(dir, { recursive: true });
   return dir;
+}
+
+function clearAuthDir() {
+  const dir = authDir();
+  if (fs.existsSync(dir)) fs.rmSync(dir, { recursive: true, force: true });
 }
 
 function toJid(phone) {
@@ -35,72 +43,114 @@ function extractText(message) {
   ).trim();
 }
 
+function scheduleStuckCheck() {
+  if (stuckTimer) clearTimeout(stuckTimer);
+  stuckTimer = setTimeout(() => {
+    if ((connectionState === "connecting" || connectionState === "starting") && !latestQr) {
+      console.warn("[Joana] Sem QR após 25s — a limpar sessão e tentar de novo");
+      resetBaileysSession().catch((error) => console.error("[Joana] Reset Baileys falhou:", error.message));
+    }
+  }, 25000);
+}
+
 /**
  * WhatsApp Web (não oficial). Risco de banimento pela Meta.
- * @param {{ onText: (phone: string, text: string) => Promise<void>, sendText: (phone: string, text: string) => Promise<void> }} handlers
  */
 export async function startBaileys(handlers) {
+  handlersRef = handlers;
+  await connectBaileys();
+}
+
+async function connectBaileys() {
+  const generation = ++connectGeneration;
+  connectionState = "connecting";
+  latestQr = null;
+  scheduleStuckCheck();
+
   const { state, saveCreds } = await useMultiFileAuthState(authDir());
 
-  const connect = async () => {
-    connectionState = "connecting";
-    socket = makeWASocket({
-      auth: state,
-      logger: pino({ level: "silent" }),
-      printQRInTerminal: false
-    });
+  socket = makeWASocket({
+    auth: state,
+    logger: pino({ level: "silent" }),
+    printQRInTerminal: false,
+    browser: Browsers.macOS("Joana"),
+    syncFullHistory: false,
+    markOnlineOnConnect: false
+  });
 
-    socket.ev.on("creds.update", saveCreds);
+  socket.ev.on("creds.update", saveCreds);
 
-    socket.ev.on("connection.update", async (update) => {
-      const { connection, lastDisconnect, qr } = update;
-      if (qr) {
-        latestQr = qr;
-        connectionState = "qr";
-      }
-      if (connection === "open") {
-        latestQr = null;
-        connectionState = "open";
-        console.log("[Joana] Baileys ligado ao WhatsApp");
-      }
-      if (connection === "close") {
-        connectionState = "closed";
-        const status = lastDisconnect?.error?.output?.statusCode;
-        const shouldReconnect = status !== DisconnectReason.loggedOut;
-        console.warn("[Joana] Baileys desligado", status ?? "", shouldReconnect ? "a reconectar..." : "");
-        if (shouldReconnect) {
-          setTimeout(connect, 3000);
-        } else {
-          latestQr = null;
-        }
-      }
-    });
-
-    socket.ev.on("messages.upsert", async ({ messages, type }) => {
-      if (type !== "notify") return;
-      for (const item of messages) {
-        if (!item.message || item.key.fromMe || item.key.remoteJid?.endsWith("@g.us")) continue;
-        const text = extractText(item.message);
-        if (!text) continue;
-        const phone = fromJid(item.key.remoteJid);
-        try {
-          await handlers.onText(phone, text);
-        } catch (error) {
-          console.error(`[Joana] Erro ao processar mensagem de ${phone}:`, error.message);
-        }
-      }
-    });
-  };
-
-  handlers.sendText = async (phone, text) => {
-    if (!socket || connectionState !== "open") {
-      console.warn(`[Joana] Baileys offline; não enviou para ${phone}: ${text}`);
-      return;
+  socket.ev.on("connection.update", (update) => {
+    if (generation !== connectGeneration) return;
+    const { connection, lastDisconnect, qr } = update;
+    if (qr) {
+      latestQr = qr;
+      connectionState = "qr";
+      console.log("[Joana] QR disponível em /wa/link");
     }
-    await socket.sendMessage(toJid(phone), { text });
-  };
+    if (connection === "open") {
+      latestQr = null;
+      connectionState = "open";
+      if (stuckTimer) clearTimeout(stuckTimer);
+      console.log("[Joana] Baileys ligado ao WhatsApp");
+    }
+    if (connection === "close") {
+      const status = lastDisconnect?.error?.output?.statusCode;
+      const loggedOut = status === DisconnectReason.loggedOut;
+      console.warn("[Joana] Baileys desligado", status ?? "");
+      if (loggedOut) {
+        clearAuthDir();
+        connectionState = "qr";
+      } else {
+        connectionState = "closed";
+      }
+      if (!loggedOut && status !== DisconnectReason.loggedOut) {
+        setTimeout(() => connectBaileys().catch((e) => console.error(e.message)), 3000);
+      } else if (loggedOut) {
+        setTimeout(() => connectBaileys().catch((e) => console.error(e.message)), 2000);
+      }
+    }
+  });
 
-  await connect();
+  socket.ev.on("messages.upsert", async ({ messages, type }) => {
+    if (type !== "notify" || !handlersRef) return;
+    for (const item of messages) {
+      if (!item.message || item.key.fromMe || item.key.remoteJid?.endsWith("@g.us")) continue;
+      const text = extractText(item.message);
+      if (!text) continue;
+      const phone = fromJid(item.key.remoteJid);
+      try {
+        await handlersRef.onText(phone, text);
+      } catch (error) {
+        console.error(`[Joana] Erro ao processar mensagem de ${phone}:`, error.message);
+      }
+    }
+  });
+
+  if (handlersRef) {
+    handlersRef.sendText = async (phone, text) => {
+      if (!socket || connectionState !== "open") {
+        console.warn(`[Joana] Baileys offline; não enviou para ${phone}`);
+        return;
+      }
+      await socket.sendMessage(toJid(phone), { text });
+    };
+  }
+}
+
+export async function resetBaileysSession() {
+  connectGeneration += 1;
+  latestQr = null;
+  connectionState = "starting";
+  if (stuckTimer) clearTimeout(stuckTimer);
+  try {
+    socket?.end?.();
+  } catch {
+    // ignore
+  }
+  socket = null;
+  clearAuthDir();
+  if (handlersRef) await connectBaileys();
 }
 
 export function getBaileysStatus() {
@@ -125,6 +175,7 @@ export function renderBaileysLinkPage() {
     img { width: 100%; max-width: 280px; display: block; margin: 16px 0; border: 1px solid #ded4c7; border-radius: 8px; }
     .ok { color: #1d6b5c; font-weight: 600; }
     .warn { font-size: 0.88rem; color: #7a7268; line-height: 1.5; }
+    button { margin-top: 12px; padding: 10px 14px; border: 0; border-radius: 8px; background: #264653; color: white; font-weight: 600; cursor: pointer; }
   </style>
 </head>
 <body>
@@ -132,9 +183,10 @@ export function renderBaileysLinkPage() {
   <p class="warn">Modo não oficial (WhatsApp Web). Pode haver risco de limitação da conta pela Meta.</p>
   <p id="status">A carregar…</p>
   <img id="qr" alt="QR Code" hidden>
+  <button type="button" id="resetBtn">Gerar novo QR</button>
   <ol class="warn">
     <li>No telemóvel com o WhatsApp desse número: <strong>Aparelhos ligados</strong> → <strong>Ligar um aparelho</strong></li>
-    <li>Escaneia o QR (só aparece enquanto estiver desligado)</li>
+    <li>Escaneia o QR quando aparecer abaixo</li>
   </ol>
   <p><a href="/health">Estado do servidor</a></p>
   <script>
@@ -144,7 +196,7 @@ export function renderBaileysLinkPage() {
       const status = document.getElementById("status");
       const img = document.getElementById("qr");
       if (data.state === "open") {
-        status.innerHTML = '<span class="ok">Ligado. Podes fechar esta página e testar com olá no WhatsApp.</span>';
+        status.innerHTML = '<span class="ok">Ligado. Fecha esta página e manda olá no WhatsApp.</span>';
         img.hidden = true;
         return;
       }
@@ -153,10 +205,15 @@ export function renderBaileysLinkPage() {
         img.src = data.qrDataUrl;
         img.hidden = false;
       } else {
-        status.textContent = "A aguardar QR… (recarrega dentro de segundos)";
+        status.textContent = "A aguardar QR… (pode demorar ~30s na primeira vez)";
         img.hidden = true;
       }
     }
+    document.getElementById("resetBtn").addEventListener("click", async () => {
+      document.getElementById("status").textContent = "A gerar novo QR…";
+      await fetch("/wa/reset", { method: "POST" });
+      setTimeout(refresh, 2000);
+    });
     refresh();
     setInterval(refresh, 3000);
   </script>

@@ -8,7 +8,13 @@ import { normalizeWaPhone, PLACEHOLDER_WA_ID } from "./phone.js";
 import { verifyMetaWebhookSignature } from "./webhookVerify.js";
 import { WhatsAppMessenger, parseCloudWebhook, parseRequestBody } from "./whatsapp.js";
 import { sendTelegramText, startTelegramPolling } from "./telegram.js";
-import { getBaileysQrDataUrl, getBaileysStatus, renderBaileysLinkPage, startBaileys } from "./baileys.js";
+import {
+  getBaileysQrDataUrl,
+  getBaileysStatus,
+  renderBaileysLinkPage,
+  resetBaileysSession,
+  startBaileys
+} from "./baileys.js";
 import { renderDataDeletionPage, renderPrivacyPage, renderTermsPage } from "./legalPages.js";
 import { renderChatPage } from "./chatPage.js";
 
@@ -149,6 +155,11 @@ const server = http.createServer(async (request, response) => {
     if (request.method === "GET" && url.pathname === "/wa/status") {
       const qrDataUrl = await getBaileysQrDataUrl();
       return sendJson(response, 200, { ...getBaileysStatus(), qrDataUrl });
+    }
+
+    if (request.method === "POST" && url.pathname === "/wa/reset") {
+      await resetBaileysSession();
+      return sendJson(response, 200, { ok: true, message: "Sessão reiniciada. Atualiza a página." });
     }
 
     if (request.method === "POST" && url.pathname === "/api/chat/message") {
